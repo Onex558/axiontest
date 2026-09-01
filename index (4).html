@@ -743,8 +743,8 @@ header{ display:none !important; }
     <button type="button" onclick="openApp('Movies', 'https://cinera.cc/'); closeAppsDropdown();">Movies</button>
     <button type="button" onclick="openLinksModal(); closeAppsDropdown();">Links</button>
   </div>
-  <button type="button" class="rail-btn" data-view="chat" id="railChat">Chat</button>
-  <button type="button" class="rail-btn" id="railAccount">Account</button>
+  <button type="button" class="rail-btn" data-view="chat" id="railChat" onclick="window.showView&&window.showView('chat')">Chat</button>
+  <button type="button" class="rail-btn" id="railAccount" onclick="window.axiomOpenAuth&&window.axiomOpenAuth()">Account</button>
   <button type="button" class="rail-btn" id="railDiscordBtn" onclick="window.open('https://discord.gg/9TqZVcfvh4','_blank','noopener,noreferrer')">Discord</button>
   <button type="button" class="rail-btn" id="openSettings">Settings</button>
 </nav>
@@ -3391,9 +3391,9 @@ function logoClicked() {
             </div>
           </div>
           <div class="chat-messages" id="chatMessages"></div>
-          <form class="chat-composer" id="chatForm">
+          <form class="chat-composer" id="chatForm" action="javascript:void(0)" onsubmit="return false;">
             <input type="text" id="chatInput" maxlength="500" placeholder="Sign in to send…" disabled autocomplete="off" />
-            <button type="submit" id="chatSendBtn" disabled>Send</button>
+            <button type="button" id="chatSendBtn" disabled>Send</button>
           </form>
         </div>`;
       const games = $('viewGames');
@@ -3650,9 +3650,11 @@ function logoClicked() {
   }
 
   function boot() {
+    try {
     injectStyles();
     ensureAuthUI();
     ensureChatUI();
+    window.axiomOpenAuth = openAuthModal;
 
     sb.auth.getSession().then(({ data }) => onAuthChange(data.session));
     sb.auth.onAuthStateChange((_e, session) => onAuthChange(session));
@@ -3708,10 +3710,32 @@ function logoClicked() {
     window._toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
   }
 
-  async function sha256(text) {
-    const data = new TextEncoder().encode(text);
-    const buf = await crypto.subtle.digest('SHA-256', data);
-    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  // Works on file:// too (crypto.subtle often blocked offline)
+  function simpleHash(str) {
+    var h = 5381;
+    for (var i = 0; i < str.length; i++) {
+      h = ((h << 5) + h) ^ str.charCodeAt(i);
+      h = h >>> 0;
+    }
+    // expand a bit so not tiny
+    var s = String(h);
+    for (var j = 0; j < 4; j++) {
+      h = ((h << 5) + h) ^ (str.charCodeAt(j % str.length) + j * 31);
+      h = h >>> 0;
+      s += h.toString(16);
+    }
+    return s;
+  }
+  async function hashPass(password, userKey) {
+    var material = password + '::axiom::' + userKey;
+    try {
+      if (window.crypto && crypto.subtle && window.isSecureContext) {
+        var data = new TextEncoder().encode(material);
+        var buf = await crypto.subtle.digest('SHA-256', data);
+        return Array.from(new Uint8Array(buf)).map(function(b){return b.toString(16).padStart(2,'0');}).join('');
+      }
+    } catch (_) {}
+    return simpleHash(material);
   }
 
   function loadAccounts() {
@@ -3823,7 +3847,7 @@ function logoClicked() {
           <button type="button" class="auth-tab active" data-tab="login">Login</button>
           <button type="button" class="auth-tab" data-tab="signup">Sign up</button>
         </div>
-        <form id="authForm">
+        <form id="authForm" action="javascript:void(0)" onsubmit="return false;">
           <div class="auth-field">
             <label for="authUsername">Username</label>
             <input id="authUsername" type="text" maxlength="20" required placeholder="cool_player" autocomplete="username" />
@@ -3833,7 +3857,7 @@ function logoClicked() {
             <input id="authPassword" type="password" required minlength="4" placeholder="at least 4 characters" autocomplete="current-password" />
           </div>
           <p class="auth-error" id="authError" hidden></p>
-          <button type="submit" class="auth-submit" id="authSubmitBtn">Login</button>
+          <button type="button" class="auth-submit" id="authSubmitBtn">Login</button>
         </form>
         <p class="auth-hint">No email needed. Accounts stay on this browser. Use the same username/password on this device to keep XP and chat name.</p>
       </div>`;
@@ -3853,21 +3877,24 @@ function logoClicked() {
       };
     });
 
-    $('authForm').onsubmit = async (e) => {
-      e.preventDefault();
-      const signup = modal.querySelector('.auth-tab.active')?.dataset.tab === 'signup';
-      const uname = ($('authUsername').value || '').trim();
-      const password = $('authPassword').value || '';
-      const errEl = $('authError');
-      const submit = $('authSubmitBtn');
+    async function handleAuthSubmit(e) {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      var signup = modal.querySelector('.auth-tab.active') && modal.querySelector('.auth-tab.active').dataset.tab === 'signup';
+      var uname = ($('authUsername').value || '').trim();
+      var password = $('authPassword').value || '';
+      var errEl = $('authError');
+      var submit = $('authSubmitBtn');
       errEl.hidden = true;
       submit.disabled = true;
       try {
         if (!/^[A-Za-z0-9_]{3,20}$/.test(uname)) throw new Error('Username: 3–20 letters, numbers, or _');
         if (password.length < 4) throw new Error('Password must be at least 4 characters');
-        const accounts = loadAccounts();
-        const key = uname.toLowerCase();
-        const hash = await sha256(password + '::axiom::' + key);
+        var accounts = loadAccounts();
+        var key = uname.toLowerCase();
+        var hash = await hashPass(password, key);
         if (signup) {
           if (accounts[key]) throw new Error('Username already taken on this device');
           accounts[key] = { username: uname, passHash: hash, created: Date.now() };
@@ -3878,7 +3905,7 @@ function logoClicked() {
           onLoggedIn();
           toast('Account created — @' + uname);
         } else {
-          const acc = accounts[key];
+          var acc = accounts[key];
           if (!acc || acc.passHash !== hash) throw new Error('Wrong username or password');
           currentUser = { username: acc.username || uname };
           saveSession(currentUser);
@@ -3891,17 +3918,24 @@ function logoClicked() {
         errEl.hidden = false;
       } finally {
         submit.disabled = false;
-        const stillSignup = modal.querySelector('.auth-tab.active')?.dataset.tab === 'signup';
+        var stillSignup = modal.querySelector('.auth-tab.active') && modal.querySelector('.auth-tab.active').dataset.tab === 'signup';
         submit.textContent = stillSignup ? 'Sign up' : 'Login';
       }
-    };
+      return false;
+    }
+    $('authForm').onsubmit = handleAuthSubmit;
+    $('authSubmitBtn').onclick = handleAuthSubmit;
   }
 
   function openAuthModal() {
     ensureAuthUI();
-    $('authModal').classList.add('open');
-    setTimeout(() => { try { $('authUsername').focus(); } catch(_){} }, 50);
+    var modal = $('authModal');
+    if (!modal) { alert('Auth UI failed to load'); return; }
+    modal.classList.add('open');
+    setTimeout(function(){ try { $('authUsername').focus(); } catch(_){} }, 50);
   }
+  window.axiomOpenAuth = openAuthModal;
+  window.axiomLogout = function(){ try { logout(); } catch(_){} };
 
   function logout() {
     currentUser = null;
@@ -3925,9 +3959,9 @@ function logoClicked() {
             <button type="button" class="tool-btn" id="chatLoginBtn">Login</button>
           </div>
           <div class="chat-messages" id="chatMessages"></div>
-          <form class="chat-composer" id="chatForm">
+          <form class="chat-composer" id="chatForm" action="javascript:void(0)" onsubmit="return false;">
             <input type="text" id="chatInput" maxlength="500" placeholder="Sign in to send…" disabled autocomplete="off" />
-            <button type="submit" id="chatSendBtn" disabled>Send</button>
+            <button type="button" id="chatSendBtn" disabled>Send</button>
           </form>
         </div>`;
       const games = $('viewGames');
@@ -3946,7 +3980,9 @@ function logoClicked() {
     const form = $('chatForm');
     if (form && !form.dataset.wired) {
       form.dataset.wired = '1';
-      form.onsubmit = (e) => { e.preventDefault(); sendMessage(); };
+      form.onsubmit = function(e){ if(e){e.preventDefault();e.stopPropagation();} sendMessage(); return false; };
+      var sendBtn = $('chatSendBtn');
+      if (sendBtn) sendBtn.onclick = function(e){ if(e){e.preventDefault();e.stopPropagation();} sendMessage(); return false; };
     }
 
     const acc = $('railAccount');
@@ -4117,34 +4153,44 @@ function logoClicked() {
   }
 
   function boot() {
-    injectStyles();
-    ensureAuthUI();
-    ensureChatUI();
+    try {
+      injectStyles();
+      ensureAuthUI();
+      ensureChatUI();
+      window.axiomOpenAuth = openAuthModal;
 
-    // ensure showView supports chat
-    if (typeof window.showView === 'function') {
-      const orig = window.showView;
-      window.showView = function (name) {
-        orig(name);
-        if (name === 'chat') scrollBottom();
-      };
-    }
+      if (typeof window.showView === 'function') {
+        var orig = window.showView;
+        window.showView = function (name) {
+          orig(name);
+          if (name === 'chat') scrollBottom();
+        };
+      }
 
-    messages = loadCache();
-    renderMessages();
-    connectChat();
+      messages = loadCache();
+      renderMessages();
+      connectChat();
 
-    const session = loadSession();
-    if (session && session.username) {
-      currentUser = { username: session.username };
-      onLoggedIn();
-    } else {
-      updateAuthUI();
+      var session = loadSession();
+      if (session && session.username) {
+        currentUser = { username: session.username };
+        onLoggedIn();
+      } else {
+        updateAuthUI();
+      }
+    } catch (e) {
+      console.error('[Axiom auth]', e);
+      alert('Account system error: ' + (e && e.message ? e.message : e));
     }
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
-  else boot();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () {
+      try { boot(); } catch (e) { console.error(e); alert('Axiom chat failed: ' + e.message); }
+    });
+  } else {
+    try { boot(); } catch (e) { console.error(e); alert('Axiom chat failed: ' + e.message); }
+  }
 })();
 </script>
 
